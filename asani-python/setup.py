@@ -24,5 +24,5 @@ setup(
         "Operating System :: OS Independent",
     ],
     python_requires=">=3.7",
-    install_requires=parse_requirements("requirements.txt")
+    install_requires=parse_requirements("requirements.txt"),
 )

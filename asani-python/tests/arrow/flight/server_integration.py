@@ -28,12 +28,14 @@ class ObjectTrackingProcessor(FlightProcessor[Frame, Detection]):
     def process(self, frames: List[Frame]) -> List[Detection]:
         detections = []
         for frame in frames:
-            detections.append(Detection(
-                stream=frame.streamName,
-                label="person 1",
-                score=57.0,
-                bbox=[12, 31.2, 54.1, 45.2]
-            ))
+            detections.append(
+                Detection(
+                    stream=frame.streamName,
+                    label="person 1",
+                    score=57.0,
+                    bbox=[12, 31.2, 54.1, 45.2],
+                )
+            )
         return detections
 
 

@@ -9,11 +9,9 @@ Resp = TypeVar("Resp", bound=BaseModel)
 
 
 class AsaniFlightClient(Generic[Req, Resp]):
-    def __init__(self,
-                 host: str,
-                 port: int,
-                 request_model: Type[Req],
-                 response_model: Type[Resp]):
+    def __init__(
+        self, host: str, port: int, request_model: Type[Req], response_model: Type[Resp]
+    ):
         self.client = FlightClient((host, port))
         self.request_serializer = Serializer(request_model)
         self.response_serializer = Serializer(response_model)

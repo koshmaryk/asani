@@ -8,7 +8,6 @@ Out = TypeVar("Out", bound=BaseModel)
 
 
 class Processor(ABC, Generic[In, Out]):
-
     @abstractmethod
     def command(self) -> str:
         raise NotImplemented()

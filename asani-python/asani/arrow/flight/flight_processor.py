@@ -8,7 +8,6 @@ Out = TypeVar("Out", bound=BaseModel)
 
 
 class FlightProcessor(ABC, Generic[In, Out]):
-
     def __init__(self, request_model: Type[In], response_model: Type[Out]):
         super().__init__()
         self.request_serializer = Serializer(request_model)

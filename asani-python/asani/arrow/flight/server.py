@@ -5,7 +5,6 @@ import asyncio
 
 
 class AsaniFlightServer(FlightServerBase):
-
     def __init__(self, location, processors: List[FlightProcessor], **kwargs):
         super().__init__(location, **kwargs)
         self.processors = processors
@@ -16,7 +15,7 @@ class AsaniFlightServer(FlightServerBase):
 
         processor = next(
             (proc for proc in self.processors if proc.command() == command),
-            None  # Return None if no processor matches the command
+            None,  # Return None if no processor matches the command
         )
 
         if processor is not None:

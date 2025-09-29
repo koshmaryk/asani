@@ -43,7 +43,9 @@ def test_asani_flight_client():
 
     # Create the server
     server = AsaniFlightServer(location=location, processors=[processor_a, processor_b])
-    client = AsaniFlightClient(host="localhost", port=8815, request_model=Person, response_model=Person)
+    client = AsaniFlightClient(
+        host="localhost", port=8815, request_model=Person, response_model=Person
+    )
 
     # Start the server in a thread
     import threading
