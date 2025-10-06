@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Annotated, Any, Type, TypeVar, Generic, List, get_origin, get_args
+from typing import Any, Optional, Type, TypeVar, Generic, List, get_origin, get_args
 from pydantic import BaseModel
 import pyarrow as pa
 
@@ -22,10 +22,11 @@ class Serializer(Generic[T]):
             field_data = table.column(field_name)
             field_type = schema.get(field_name)
 
-            if self.is_tensor_type(field_type):
-                shape = self.get_tensor_shape(field_type)
+            if isinstance(field_data.type, pa.FixedShapeTensorType):
+                # Extract shape from the Arrow type itself
+                shape = list(field_data.type.shape)
                 data_dict[field_name] = [
-                    self.unflatten_tensor(tensor, shape)
+                    self._unflatten_tensor(tensor, shape)
                     for tensor in field_data.to_pylist()
                 ]
             elif get_origin(field_type) is tuple:
@@ -59,11 +60,12 @@ class Serializer(Generic[T]):
             # Initialize an empty list to collect values for this field
             field_data = [getattr(item, field) for item in data]
 
-            if self.is_tensor_type(field_type):
-                shape = self.get_tensor_shape(field_type)
+            # Check if it's a 2D+ list (tensor)
+            shape = self.infer_shape(field_data[0])
+            if len(shape) > 1:
                 element_type = self.get_tensor_element_type(field_type)
                 arrow_type = pa.fixed_shape_tensor(
-                    self._get_arrow_type(element_type), list(shape)
+                    self._get_arrow_type(element_type), shape
                 )
 
                 # Flatten each tensor and create the array
@@ -85,7 +87,9 @@ class Serializer(Generic[T]):
         # Create a Table from the vectors and schema
         return pa.table(vectors, schema=arrow_schema)
 
-    def _get_arrow_type(self, field_type: Type) -> pa.DataType:
+    def _get_arrow_type(
+        self, field_type: Type, field_data: Optional[Any] = None
+    ) -> pa.DataType:
         if field_type is int:
             return pa.int64()
         elif field_type is str:
@@ -99,58 +103,52 @@ class Serializer(Generic[T]):
         elif field_type is datetime:
             return pa.timestamp("ms")
         elif get_origin(field_type) is tuple:
-            if hasattr(field_type, "__args__") and field_type.__args__:
-                fields = []
-                for i, arg_type in enumerate(field_type.__args__):
-                    field_name = f"_{i}"
-                    field_arrow_type = self._get_arrow_type(arg_type)
-                    fields.append(pa.field(field_name, field_arrow_type))
-                return pa.struct(fields)
-            else:
+            args = get_args(field_type)
+            if not args:
                 return pa.struct([])
+
+            fields = []
+            for i, arg_type in enumerate(args):
+                field_name = f"_{i}"
+                field_arrow_type = self._get_arrow_type(arg_type)
+                fields.append(pa.field(field_name, field_arrow_type))
+            return pa.struct(fields)
         elif get_origin(field_type) is list:
-            # For sequences (lists), map to Arrow list type
-            element_type = get_args(field_type)[0]
-            return pa.list_(self._get_arrow_type(element_type))
-        elif self.is_tensor_type(field_type):
-            shape = self.get_tensor_shape(field_type)
-            element_type = self.get_tensor_element_type(field_type)
-            return pa.fixed_shape_tensor(
-                self._get_arrow_type(element_type), list(shape)
-            )
+            shape = self.infer_shape(field_data)
+            if len(shape) > 1:
+                # 2D+ list (tensor)
+                element_type = self.get_tensor_element_type(field_type)
+                return pa.fixed_shape_tensor(self._get_arrow_type(element_type), shape)
+            elif len(shape) == 1:
+                # 1D list
+                element_type = self.get_tensor_element_type(field_type)
+                return pa.list_(self._get_arrow_type(element_type))
+            else:
+                # Fallback: use type annotation
+                element_type = get_args(field_type)[0]
+                return pa.list_(self._get_arrow_type(element_type))
         else:
             raise ValueError(f"Unsupported field type: {field_type}")
 
-    def is_tensor_type(self, field_type: Type) -> bool:
-        if get_origin(field_type) is not Annotated:
-            return False
-        metadata = get_args(field_type)[1:]
-        return len(metadata) >= 2 and metadata[0] == "tensor"
-
-    def get_tensor_shape(self, field_type: Type) -> tuple:
-        if not self.is_tensor_type(field_type):
-            raise ValueError(f"Field type {field_type} is not a tensor annotation")
-        metadata = get_args(field_type)[1:]
-        shape = metadata[1]
-        if not isinstance(shape, tuple):
-            raise ValueError(f"Tensor shape must be a tuple, got {type(shape)}")
-
+    def infer_shape(self, field_data: Any) -> list:
+        if not isinstance(field_data, list):
+            return []
+        shape = [len(field_data)]
+        if len(field_data) > 0 and isinstance(field_data[0], list):
+            shape += self.infer_shape(field_data[0])
         return shape
 
     def get_tensor_element_type(self, field_type: Type) -> Type:
-        current_type = field_type
-        if get_origin(current_type) is Annotated:
-            current_type = get_args(current_type)[0]
-
-        while get_origin(current_type) is list:
-            args = get_args(current_type)
+        curr_type = field_type
+        while get_origin(curr_type) is list:
+            args = get_args(curr_type)
             if not args:
                 raise ValueError(f"Cannot extract element type from {field_type}")
-            current_type = args[0]
+            curr_type = args[0]
 
-        return current_type
+        return curr_type
 
-    def flatten_tensor(self, data: Any, shape: tuple) -> List:
+    def flatten_tensor(self, data: Any, shape: List[int]) -> List:
         if not isinstance(data, list):
             return [data]
 
@@ -160,21 +158,18 @@ class Serializer(Generic[T]):
 
         return result
 
-    def unflatten_tensor(self, flat_data: Any, shape: tuple):
-        expected_size = 1
+    def _unflatten_tensor(self, flat_data: List, shape: List[int]) -> Any:
+        total_size = 1
         for dim in shape:
-            expected_size *= dim
+            total_size *= dim
 
-        if len(flat_data) != expected_size:
-            raise ValueError(f"Data size {len(flat_data)} doesn't match shape {shape} ")
+        if len(flat_data) != total_size:
+            raise ValueError(f"Data size {len(flat_data)} does not match shape {shape}")
 
         if len(shape) == 1:
             return flat_data
 
-        chunk_size = 1
-        for dim in shape[1:]:
-            chunk_size *= dim
-
+        chunk_size = total_size // shape[0]
         result = []
 
         for i in range(shape[0]):
@@ -183,7 +178,7 @@ class Serializer(Generic[T]):
             chunk = flat_data[start:end]
 
             if len(shape) > 2:
-                result.append(self.unflatten_tensor(chunk, shape[1:]))
+                result.append(self._unflatten_tensor(chunk, shape[1:]))
             else:
                 result.append(chunk)
 
