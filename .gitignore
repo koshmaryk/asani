@@ -3,6 +3,9 @@
 
 hs_err_pid*
 
+/.vscode/
+/.bloop/
+/.metals/
 /.idea/
 /asani-scala/.idea/
 /asani-scala/target/
