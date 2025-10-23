@@ -15,17 +15,15 @@ trait ArrowSchema[T] {
 
 object ArrowSchema {
 
-  inline def derived[T](
-    using p: Mirror.Of[T]
-  ): ArrowSchema[T] =
+  inline def derived[T](using p: Mirror.Of[T]): ArrowSchema[T] =
     new ArrowSchema[T] {
       override def schema: Schema = {
         val labels = constValueTuple[p.MirroredElemLabels].toList.asInstanceOf[List[String]]
         val types  = getTypes[p.MirroredElemTypes]
 
         val arrowFields = labels.zip(types).map {
-          case (name, tensor: FixedShapeTensor)    =>
-            new Field(name, FieldType.nullable(tensor.storageType()), null)
+          case (name, tensor: FixedShapeTensor)               =>
+            new Field(name, FieldType.nullable(tensor), null)
           case (name, (list: ArrowType.List, tpe: ArrowType)) =>
             new Field(
               name,
@@ -34,66 +32,62 @@ object ArrowSchema {
             )
           case (name, (_: ArrowType.Null, tpe: ArrowType))    =>
             new Field(name, FieldType.nullable(tpe), null)
-          case (name, tpe: ArrowType)              =>
+          case (name, tpe: ArrowType)                         =>
             new Field(name, FieldType.notNullable(tpe), null)
-          case _                                   =>
-            throw new IllegalArgumentException("Not supported Arrow type.")
+          case (name, other)                                  =>
+            throw new IllegalArgumentException(
+              s"Field '$name': Not a supported Arrow type: $other"
+            )
         }
 
         new Schema(arrowFields.asJava)
       }
     }
 
-  type TensorMetadata = (ArrowType, List[Int]) // (ValueType, Shape)
-
-  private inline def getTensorMetadata[T]: Option[TensorMetadata] =
+  private inline def getNestedSeqBaseType[T]: (ArrowType, Int) =
     inline erasedValue[T] match {
+      case _: Array[Byte] => (Types.MinorType.LARGEVARBINARY.getType, 0)
       case _: Seq[t] =>
-        getTensorMetadata[t] match {
-          // It's a nested sequence, prepend a dimension
-          case Some((valueType, shape)) => Some((valueType, 1 :: shape))
-          // It's the innermost sequence, determine the primitive type
-          case None => primitiveArrowType[t].map(t => (t, List(1)))
-        }
-      case _ => None
+        val (base, depth) = getNestedSeqBaseType[t]
+        (base, depth + 1)
+      case _: Option[t] =>
+        getNestedSeqBaseType[t]
+      case _: Int         => (Types.MinorType.INT.getType, 0)
+      case _: Long        => (Types.MinorType.BIGINT.getType, 0)
+      case _: Double      => (Types.MinorType.FLOAT8.getType, 0)
+      case _: Float       => (Types.MinorType.FLOAT4.getType, 0)
+      case _: Boolean     => (Types.MinorType.BIT.getType, 0)
+      case _: String      => (Types.MinorType.VARCHAR.getType, 0)
+      case _: Array[Byte] => (Types.MinorType.LARGEVARBINARY.getType, 0)
+      case _: Instant     => (Types.MinorType.TIMESTAMPMILLI.getType, 0)
+      case _ => throw new IllegalArgumentException(s"Unsupported base type for tensor")
     }
 
   private inline def getTypes[T <: Tuple]: List[Any] =
     inline erasedValue[T] match {
-      case _: EmptyTuple => Nil
+      case _: EmptyTuple     => Nil
       case _: (head *: tail) => arrowType[head] :: getTypes[tail]
-    }
-
-  private inline def primitiveArrowType[T]: Option[ArrowType] =
-    inline erasedValue[T] match {
-      case _: Int => Some(Types.MinorType.INT.getType)
-      case _: Long => Some(Types.MinorType.BIGINT.getType)
-      case _: Double => Some(Types.MinorType.FLOAT8.getType)
-      case _: Float => Some(Types.MinorType.FLOAT4.getType)
-      case _: Boolean => Some(Types.MinorType.BIT.getType)
-      case _ => None
     }
 
   private inline def arrowType[T]: Any =
     inline erasedValue[T] match {
-      // First, check if it's a tensor-like structure
-      case _: Seq[_] =>
-        getTensorMetadata[T] match {
-          case Some((valueType, shape)) =>
-            // We found a tensor! Return a FixedShapeTensor instance.
-            // Note: The shape is a placeholder here; the actual shape will be data-dependent.
-            FixedShapeTensor(valueType, shape.toSeq)
-          case None => new ArrowType.List() // Fallback for non-primitive lists
+      case _: Int         => Types.MinorType.INT.getType
+      case _: Long        => Types.MinorType.BIGINT.getType
+      case _: Double      => Types.MinorType.FLOAT8.getType
+      case _: Float       => Types.MinorType.FLOAT4.getType
+      case _: Boolean     => Types.MinorType.BIT.getType
+      case _: String      => Types.MinorType.VARCHAR.getType
+      case _: Array[Byte] => Types.MinorType.LARGEVARBINARY.getType
+      case _: Instant     => Types.MinorType.TIMESTAMPMILLI.getType
+      case _: Option[t]   => (new ArrowType.Null(), arrowType[t])
+      case _: Seq[t] =>
+        getNestedSeqBaseType[t] match {
+          case (arrowType, 0) =>
+            (new ArrowType.List(), arrowType)
+          case (arrowType, _) =>
+            FixedShapeTensor(arrowType, Seq(1))
         }
-      case _: Option[t] => (new ArrowType.Null(), arrowType[t])
-      case _ => primitiveArrowType[T].getOrElse {
-        inline erasedValue[T] match {
-          case _: String => Types.MinorType.VARCHAR.getType
-          case _: Array[Byte] => Types.MinorType.LARGEVARBINARY.getType
-          case _: Instant => Types.MinorType.TIMESTAMPMILLI.getType
-          case t => throw new IllegalArgumentException(s"Unsupported type: $t")
-        }
-      }
+      case t              => throw new IllegalArgumentException(s"Unsupported type: $t")
     }
 
   inline given derivedArrowSchema[T](using m: Mirror.ProductOf[T]): ArrowSchema[T] = derived

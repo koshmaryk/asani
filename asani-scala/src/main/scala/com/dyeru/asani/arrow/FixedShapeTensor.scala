@@ -43,7 +43,7 @@ class FixedShapeTensor private (
   def getDimNames: Option[Vector[String]] = dimNames
   def getPermutation: Option[Vector[Int]] = permutation
   def getNdim: Int = shape.length
-  def getListSize: Int = shape.product.toInt
+  def getListSize: Int = shape.product
 
   def getStrides: Vector[Int] = {
     val elementSize = getElementSize(valueType)
@@ -140,7 +140,7 @@ class FixedShapeTensor private (
       fieldType: FieldType,
       allocator: BufferAllocator
   ): FieldVector = {
-    new FixedShapeTensorVector(name, allocator, this)
+    new Tensor(name, allocator, this)
   }
 }
 
@@ -201,6 +201,7 @@ object FixedShapeTensor {
 
   private def arrowTypeToString(arrowType: ArrowType): String =
     arrowType match {
+      case s: ArrowType.Bool => "bool"
       case i: ArrowType.Int => s"int${i.getBitWidth}"
       case f: ArrowType.FloatingPoint =>
         f.getPrecision match {
@@ -211,7 +212,7 @@ object FixedShapeTensor {
               s"Unsupported floating point precision: $other"
             )
         }
-      case _: ArrowType.Bool => "bool"
+      case _: ArrowType.Utf8 => "str"
       case fsb: ArrowType.FixedSizeBinary =>
         s"fixedsizebinary[${fsb.getByteWidth}]"
       case _ =>
@@ -220,7 +221,7 @@ object FixedShapeTensor {
         )
     }
 
-  private[FixedShapeTensor] def stringToArrowType(typeStr: String): ArrowType =
+  private def stringToArrowType(typeStr: String): ArrowType =
     typeStr match {
       // Signed integers
       case "int8"  => new ArrowType.Int(8, true)

@@ -3,10 +3,12 @@ package com.dyeru.asani.arrow
 import org.apache.arrow.vector.*
 import org.apache.arrow.vector.complex.ListVector
 import org.apache.arrow.vector.complex.impl.UnionListWriter
+import org.apache.arrow.vector.types.pojo.{Field, FieldType}
 
 import java.nio.charset.StandardCharsets
 import java.time.Instant
 import scala.annotation.tailrec
+import scala.collection.mutable.ArrayBuffer
 import scala.deriving.Mirror
 import scala.jdk.CollectionConverters.*
 
@@ -45,7 +47,29 @@ object ToVector {
     }
   }
 
-  @tailrec
+  //@tailrec
+  private def getTensorShape(data: Any, shape: Vector[Int] = Vector.empty): (Vector[Int], Any) = {
+    data match {
+      case s: Seq[_] if s.nonEmpty =>
+        val (innerShape, firstElement) = getTensorShape(s.head)
+        s.tail.foreach { item =>
+          val (shape, _) = getTensorShape(item)
+          require(shape == innerShape, s"Tensor dimensions are not uniform. Expected shape $innerShape, got $shape")
+        }
+        (s.length +: innerShape, firstElement)
+      case s: Seq[_] if s.isEmpty => (shape :+ 0, null)
+      case other => (shape, other)
+    }
+  }
+
+  private def flattenTensor(data: Any, buffer: ArrayBuffer[Any]): Unit = {
+    data match {
+      case seq: Seq[_] => seq.foreach(flattenTensor(_, buffer))
+      case other => buffer += other
+    }
+  }
+
+  //@tailrec
   private def setField(vector: FieldVector, index: Int, value: Any): Unit =
     value match {
       case v: Int => vector.asInstanceOf[IntVector].setSafe(index, v)
@@ -58,13 +82,34 @@ object ToVector {
       case v: Instant => vector.asInstanceOf[TimeStampMilliVector].setSafe(index, v.toEpochMilli)
 
       case v: Seq[_] =>
-        val writer = vector.asInstanceOf[ListVector].getWriter
-        writer.setPosition(index)
-        writer.startList()
-        v.foreach(elem => writeListRecursive(writer, elem))
-        writer.endList()
-        writer.setValueCount(v.length)
+        vector match {
+          case listVector: ListVector =>
+            val writer = listVector.getWriter
+            writer.setPosition(index)
+            writer.startList()
+            v.foreach(element => writeListRecursive(writer, element))
+            writer.endList()
 
+          case tensorVector: Tensor =>
+            val buffer = ArrayBuffer[Any]()
+            flattenTensor(v, buffer)
+            
+            val underlyingList = tensorVector.getUnderlyingVector
+            val dataVector = underlyingList.getDataVector
+            
+            underlyingList.setNotNull(index)
+            
+            // Calculate the starting offset for this tensor in the flat data vector
+            val listSize = tensorVector.extensionType.getListSize
+            val offset = index * listSize
+            
+            buffer.zipWithIndex.foreach { case (element, i) =>
+              writeTensorElement(dataVector, offset + i, element)
+            }
+
+          case _ =>
+            throw new IllegalArgumentException(s"Unsupported vector type ${vector.getClass.getName} for Seq data")
+        }
       case v: Option[_] => v match
         case Some(iv) => setField(vector, index, iv)
         case None => vector.setNull(index)
@@ -84,6 +129,17 @@ object ToVector {
         case Some(inner) => writeListRecursive(writer, inner)
         case None => writer.writeNull()
       case other => throw new IllegalArgumentException(s"Unsupported type in list: ${other.getClass}")
+    }
+  }
+
+  private def writeTensorElement(dataVector: FieldVector, index: Int, value: Any): Unit = {
+    value match {
+      case v: Int => dataVector.asInstanceOf[IntVector].set(index, v)
+      case v: Long => dataVector.asInstanceOf[BigIntVector].set(index, v)
+      case v: Float => dataVector.asInstanceOf[Float4Vector].set(index, v)
+      case v: Double => dataVector.asInstanceOf[Float8Vector].set(index, v)
+      case v: Boolean => dataVector.asInstanceOf[BitVector].set(index, if v then 1 else 0)
+      case other => throw new IllegalArgumentException(s"Unsupported type for tensor element: ${other.getClass}")
     }
   }
 

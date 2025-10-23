@@ -3,18 +3,14 @@
 
 hs_err_pid*
 
-/.vscode/
-/.bloop/
-/.metals/
-/.idea/
-/asani-scala/.idea/
-/asani-scala/target/
-/asani-scala/project/target/
-/asani-scala/.bsp/
-/asani-scala/project/project/
-asani-scala/src/main/scala/com/.DS_Store
-
-/asani-python/.idea/
+**/.vscode/
+**/.bloop/
+**/.metals/
+**/.idea/
+**/target/
+**/project/target/
+**/.bsp/
+**/project/project/
 
 **/.DS_Store
 

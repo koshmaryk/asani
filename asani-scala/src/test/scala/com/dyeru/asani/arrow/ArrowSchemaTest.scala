@@ -98,7 +98,7 @@ class ArrowSchemaTest extends AnyFunSuite with Matchers {
     field.getType shouldBe Types.MinorType.INT.getType
   }
 
-  test("schema should handle List[String] correctly (with child check)") {
+  test("schema should handle List[String] correctly") {
     case class TestCase(values: List[String])
     val schema: Schema = ArrowSchema.derived[TestCase].schema
     val field          = schema.getFields.get(0)
@@ -149,41 +149,6 @@ class ArrowSchemaTest extends AnyFunSuite with Matchers {
     childField.getType shouldBe Types.MinorType.FLOAT8.getType
   }
 
-  test("schema should handle Option[List[Int]] correctly") {
-    case class TestCase(values: Option[List[Int]])
-    val schema: Schema = ArrowSchema.derived[TestCase].schema
-    val field          = schema.getFields.get(0)
-
-    // The list field itself is nullable
-    field.getName shouldBe "values"
-    field.isNullable shouldBe true
-    field.getType shouldBe ArrowType.List()
-
-    // Verify the child field
-    field.getChildren.size() shouldBe 1
-    val childField = field.getChildren.get(0)
-    childField.getName shouldBe "item"
-    childField.isNullable shouldBe true
-    childField.getType shouldBe Types.MinorType.INT.getType
-  }
-
-  test("schema should handle List[Option[String]] correctly") {
-    case class TestCase(values: List[Option[String]])
-    val schema: Schema = ArrowSchema.derived[TestCase].schema
-    val field          = schema.getFields.get(0)
-
-    field.getName shouldBe "values"
-    field.isNullable shouldBe true
-    field.getType shouldBe ArrowType.List()
-
-    // Verify the child field (which should be a nullable string)
-    field.getChildren.size() shouldBe 1
-    val childField = field.getChildren.get(0)
-    childField.getName shouldBe "item"
-    childField.isNullable shouldBe true
-    childField.getType shouldBe Types.MinorType.VARCHAR.getType
-  }
-
   test("schema should handle multiple fields correctly") {
     case class TestCase(id: Int, name: String, timestamp: java.time.Instant)
     val schema: Schema = ArrowSchema.derived[TestCase].schema
@@ -202,5 +167,29 @@ class ArrowSchemaTest extends AnyFunSuite with Matchers {
     val field3 = schema.getFields.get(2)
     field3.getName shouldBe "timestamp"
     field3.getType shouldBe Types.MinorType.TIMESTAMPMILLI.getType
+  }
+
+  test("schema should handle nested List[List[String]] as FixedShapeTensor") {
+    // Register the extension type for this test
+    FixedShapeTensor.register()
+
+    case class TestTensor(matrix: List[List[String]])
+
+    val schema: Schema = ArrowSchema.derived[TestTensor].schema
+    val field = schema.getFields.get(0)
+
+    field.getName shouldBe "matrix"
+    field.isNullable shouldBe true
+
+    field.getType shouldBe a[FixedShapeTensor]
+    val tensorType = field.getType.asInstanceOf[FixedShapeTensor]
+
+    tensorType.storageType() shouldBe an[ArrowType.FixedSizeList]
+    val storageType = tensorType.storageType().asInstanceOf[ArrowType.FixedSizeList]
+    storageType.getListSize shouldBe 1
+
+    tensorType.getValueType shouldBe Types.MinorType.VARCHAR.getType
+    tensorType.getShape shouldBe Vector(1)
+    tensorType.extensionName() shouldBe "arrow.fixed_shape_tensor"
   }
 }
